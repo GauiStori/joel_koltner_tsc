@@ -83,7 +83,7 @@ class SerIface(threading.Thread):
         self.lastState = None
         self.terminate = False # Exit thread when this becomes true
         
-        self.serI = serial.Serial(port=None, baudrate=9600, rtscts=1, timeout=0.25) # Defaults to 8-N-1
+        self.serI = serial.Serial(port=None, baudrate=19200, rtscts=1, timeout=0.25) # Defaults to 8-N-1
         self.db = DataByter(self.serI)
         self.dd = DDots()
         
@@ -155,8 +155,8 @@ class SerIface(threading.Thread):
                 self.textLine = self.textLine[:-20]
         else: # No more character waiting
             return 0.25 # Return quickly
-        
-        if self.textLine.find("DIGITIZING SAMPLING OSCILLOSCOPE") < 0: # Garbage line
+
+        if  not ((self.textLine.find("CSA803") == 0) or (self.textLine.find("DIGITIZING SAMPLING OSCILLOSCOPE") == 0)): # Garbage line
             self.textLine = ""
             return 0.25 # Return quickly
 
@@ -167,7 +167,7 @@ class SerIface(threading.Thread):
     def GetXRes(self):
         
         # Everything should be on the up-and-up here, with the scope starting to spew data
-        self.xRes = StrToInt(self.serI.readline(size=20))
+        self.xRes = StrToInt(self.serI.readline())
         if self.xRes<1 or self.xRes>1000: # That's not right...
             self.state = self.WaitForHeader
             return 0
@@ -177,7 +177,7 @@ class SerIface(threading.Thread):
     
     def GetYRes(self):
         
-        self.yRes = StrToInt(self.serI.readline(size=20))
+        self.yRes = StrToInt(self.serI.readline())
         if self.yRes<1 or self.yRes>1000: # That's not right...
             self.state = self.WaitForHeader
             return 0
