@@ -528,7 +528,7 @@ class GUI(wx.Frame):
             frm = wx.Frame(parent=self, id=self.ID_HELP_WIN, title="Help...", size=wx.Size(800,600))
             frm.SetIcon(wx.GetApp().GetAppIcon())
             htmlWin = wx.html.HtmlWindow(parent=frm)
-            htmlWin.LoadPage("TSC Help.html")
+            htmlWin.LoadPage("TSC_Help.html")
             frm.Show()
         else:
             helpWin.Raise()
@@ -574,7 +574,7 @@ class App(wx.App):
         pass
     
     def GetAppIcon(self):
-        return wx.Icon("TSC Icon.xpm",wx.BITMAP_TYPE_XPM)
+        return wx.Icon("TSC_Icon.xpm",wx.BITMAP_TYPE_XPM)
     
             
 #----------------------------------------------------------------------------
