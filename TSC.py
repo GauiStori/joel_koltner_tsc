@@ -12,6 +12,7 @@ import wx.html
 import serial
 import threading
 import time
+import struct
 
 from TSC_wdr import *
 
@@ -30,7 +31,7 @@ def StrToInt(text="",badVal=0):
 # Build a solid bitmap of a given size and color
 # For color, pass in something that wx.Brush can use: Either a color name/tuple/etc. or a wx.Colour
 def MakeSolidBmp(width=16, height=16, color='blue'):
-    bmp = wx.EmptyBitmap(width,height)
+    bmp = wx.Bitmap(width,height)
     dc = wx.MemoryDC(bmp)
     dc.SetBackground(wx.Brush(color))
     dc.Clear()
@@ -119,7 +120,7 @@ class SerIface(threading.Thread):
         try:
             self.serI.open()
             
-        except serial.SerialException, err:
+        except serial.SerialException as err:
             self.SetStatus("Unable to open specified port" + self.dd.Dots())
             return 0.5
         
@@ -139,7 +140,7 @@ class SerIface(threading.Thread):
         # Check if this is the first time here
         if self.lastState != self.WaitForHeader: # Yep
             self.serI.flushInput()
-            self.textLine = ""
+            self.textLine = b""
 
         # Just wait around, collecting individual characters until we hit a line feed... at that point, check for
         # the scope's identifier, and if it looks OK, go with it
@@ -148,15 +149,15 @@ class SerIface(threading.Thread):
 
         while self.serI.inWaiting() != 0:
             ch = self.serI.read(1)
-            if ch == '\x0a':
+            if struct.unpack("B",ch)[0] == 0x0A:
                 break
-            self.textLine = ''.join([self.textLine,ch])
+            self.textLine += ch
             if len(self.textLine) > 100: # Don't let line grow forever if we're just getting garbage
                 self.textLine = self.textLine[:-20]
         else: # No more character waiting
             return 0.25 # Return quickly
-
-        if  not ((self.textLine.find("CSA803") == 0) or (self.textLine.find("DIGITIZING SAMPLING OSCILLOSCOPE") == 0)): # Garbage line
+        txt = self.textLine.decode('ascii')
+        if  not ((txt.find("CSA803") == 0) or (txt.find("DIGITIZING SAMPLING OSCILLOSCOPE") == 0)): # Garbage line
             self.textLine = ""
             return 0.25 # Return quickly
 
@@ -167,8 +168,9 @@ class SerIface(threading.Thread):
     def GetXRes(self):
         
         # Everything should be on the up-and-up here, with the scope starting to spew data
-        self.xRes = StrToInt(self.serI.readline())
+        self.xRes = StrToInt(self.serI.readline().decode('ascii'))
         if self.xRes<1 or self.xRes>1000: # That's not right...
+            print("Error: xRes incorrect, %d"%self.xRes)
             self.state = self.WaitForHeader
             return 0
         
@@ -179,6 +181,7 @@ class SerIface(threading.Thread):
         
         self.yRes = StrToInt(self.serI.readline())
         if self.yRes<1 or self.yRes>1000: # That's not right...
+            print("Error: yRes incorrect, %d"%self.yRes)
             self.state = self.WaitForHeader
             return 0
 
@@ -195,7 +198,8 @@ class SerIface(threading.Thread):
         
         # After the header block, there's a null terminator before the actual data
         n = self.serI.read(1)
-        if n != '\x00':
+        if struct.unpack("B",n)[0] != 0:
+            print("Error: Null terminator not found")
             self.state = self.WaitForHeader
             return 0
         
@@ -214,6 +218,7 @@ class SerIface(threading.Thread):
             time.sleep(.100)
             retries -= 1
         else:
+            print("Error: Wait for data failed")
             self.state = self.WaitForHeader
             return 0
 
@@ -298,18 +303,18 @@ class DataByter():
         if len(self.buf) > self.idx:
             b = self.buf[self.idx]
             self.idx += 1
-            return ord(b)
+            return struct.unpack("B",b)
         
         # Get whatever's in the serial port, or hang for at least one character if it's empty
         btg = max(1,self.serI.inWaiting())
-        self.buf = "".join([self.buf,self.serI.read(btg)])
+        self.buf += self.serI.read(btg)
         
         # By now there should be something there...
         if len(self.buf) > self.idx:
             b = self.buf[self.idx]
             self.idx += 1
-            return ord(b)
-            
+            return struct.unpack("B",b)
+
         # Nothing available
         raise serial.SerialException
         
@@ -346,25 +351,26 @@ class GUI(wx.Frame):
         for anID in range(0,8):
             bmp = MakeSolidBmp(self.COLOR_SS,self.COLOR_SS,self.palColors[anID])
             abb = wx.BitmapButton(self.panel,anID+self.ID_PALETTE_BMBS,bmp)
-            abb.SetToolTipString("Change color mapped to pixel value %d" % anID)
+            abb.SetToolTip("Change color mapped to pixel value %d" % anID)
             ps.Add(abb)
-            ps.AddSpacer((10,10))
+            ps.AddSpacer(10)
             self.Bind(wx.EVT_BUTTON,self.ChangePalette,source=abb)
 
         # Set up capture panel
         self.capWin = wx.Window(self.panel,-1,wx.DefaultPosition,(TEK_XRES,TEK_YRES),wx.NO_BORDER)
-        self.panel.capSizer.Add(item=self.capWin, flag=wx.ALL, border=10)
-        self.capBmp = wx.EmptyBitmap(TEK_XRES,TEK_YRES)
+        #self.panel.capSizer.Add(item=self.capWin, flag=wx.ALL, border=10)
+        self.panel.capSizer.Add(self.capWin, flag=wx.ALL, border=10)
+        self.capBmp = wx.Bitmap(TEK_XRES,TEK_YRES)
         self.NewPage()
         
         # Tell main sizer to perform layer and then set minimum size of us (frame) to it            
         self.mdSzr.SetSizeHints(self) 
 
         # WDR: handler declarations for GUI
-        wx.EVT_BUTTON(self, ID_PAL_DEFAULTS, self.OnSetPalDefaults)
-        wx.EVT_BUTTON(self, ID_HELP_BUTTON, self.Help)
-        self.Bind(wx.EVT_IDLE,self.OnIdle)
-        wx.EVT_BUTTON(self, ID_CITC_BUTTON, self.OnCopyToClipboard)
+        self.Bind(wx.EVT_BUTTON, self.OnSetPalDefaults, id=ID_PAL_DEFAULTS)
+        self.Bind(wx.EVT_BUTTON, self.Help, id=ID_HELP_BUTTON)
+        self.Bind(wx.EVT_IDLE, self.OnIdle)
+        self.Bind(wx.EVT_BUTTON, self.OnCopyToClipboard, id=ID_CITC_BUTTON)
         self.capWin.Bind(wx.EVT_PAINT,self.OnPaintCapWin) # Note that catching self's own EVT_PAINT isn't quite right and doesn't work under Linux
         self.capWin.Bind(wx.EVT_ERASE_BACKGROUND,self.OnEraseCapWin)
         #self.Bind(wx.EVT_SIZE,self.OnSize) # Not needed now that EVT_PAINT goes to the right place!
@@ -390,7 +396,7 @@ class GUI(wx.Frame):
         if self.sph != None:
             self.sph.terminate = True # Tell serial receiver thread to terminate
             i = 1
-            while self.sph.isAlive() and i<=100: # Wait for thread to terminate
+            while self.sph.is_alive() and i<=100: # Wait for thread to terminate
                 i += 1
                 time.sleep(0.025)
                 
@@ -571,7 +577,7 @@ class App(wx.App):
         return True
 
     def OnExit(self):
-        pass
+        return 0
     
     def GetAppIcon(self):
         return wx.Icon("TSC_Icon.xpm",wx.BITMAP_TYPE_XPM)

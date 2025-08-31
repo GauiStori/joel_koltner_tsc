@@ -8,7 +8,7 @@
 # Include wxPython modules
 import wx
 import wx.grid
-import wx.animate
+#import wx.animate
 
 # Custom source
 from LogTextCtrl import LogTextCtrl
@@ -39,11 +39,11 @@ def MainDlg( parent, call_fit = True, set_sizer = True ):
     item4.Add( item5, 0, wx.ALIGN_CENTER|wx.ALL, 5 )
 
     item6 = wx.ComboBox( parent, ID_SERPORT_COMBO, "", wx.DefaultPosition, [200,-1], 
-        ["COM1","COM2","/dev/ttyS0","/dev/ttyS1","/dev/ttyUSB0","/dev/ttyUSB1"] , wx.CB_DROPDOWN )
+        ["COM1","COM2","COM3","COM4","/dev/ttyS0","/dev/ttyS1","/dev/ttyUSB0","/dev/ttyUSB1"] , wx.CB_DROPDOWN )
     item6.SetToolTip( wx.ToolTip("Select serial port from drop-down list or enter it directly.") )
     item4.Add( item6, 0, wx.ALIGN_CENTER|wx.ALL, 5 )
 
-    item2.Add( item4, 0, wx.ALIGN_CENTER_VERTICAL|wx.ALL, 5 )
+    item2.Add( item4, 0, wx.ALL, 5 )
 
     item7 = wx.BoxSizer( wx.HORIZONTAL )
     
@@ -53,7 +53,7 @@ def MainDlg( parent, call_fit = True, set_sizer = True ):
     item9 = wx.StaticText( parent, ID_SERSTATUS, "---", wx.DefaultPosition, wx.DefaultSize, 0 )
     item7.Add( item9, 0, wx.ALIGN_CENTER|wx.ALL, 5 )
 
-    item2.Add( item7, 0, wx.ALIGN_CENTER_VERTICAL|wx.ALL, 5 )
+    item2.Add( item7, 0, wx.ALL, 5 )
 
     item2.Add( [ 20, 20 ] , 0, wx.ALIGN_CENTER|wx.ALL, 5 )
 
@@ -79,17 +79,17 @@ def MainDlg( parent, call_fit = True, set_sizer = True ):
     item14.SetToolTip( wx.ToolTip("Display help on setting up your 'scope and using this program.") )
     item2.Add( item14, 0, wx.ALIGN_CENTER|wx.ALL, 5 )
 
-    item1.Add( item2, 0, wx.GROW|wx.ALIGN_CENTER_VERTICAL|wx.ALL, 5 )
+    item1.Add( item2, 0, wx.GROW|wx.ALL, 5 )
 
     item16 = wx.StaticBox( parent, -1, "Log" )
     item15 = wx.StaticBoxSizer( item16, wx.VERTICAL )
     
     item17 = LogTextCtrl( parent, ID_LOG_TEXTCTRL, "", wx.DefaultPosition, [300,300], wx.TE_MULTILINE|wx.TE_RICH|wx.TE_READONLY )
-    item15.Add( item17, 1, wx.GROW|wx.ALIGN_CENTER_VERTICAL|wx.ALL, 5 )
+    item15.Add( item17, 1, wx.GROW|wx.ALL, 5 )
 
-    item1.Add( item15, 1, wx.GROW|wx.ALIGN_CENTER_VERTICAL|wx.ALL, 5 )
+    item1.Add( item15, 1, wx.GROW|wx.ALL, 5 )
 
-    item0.Add( item1, 1, wx.GROW|wx.ALIGN_CENTER_HORIZONTAL|wx.ALL, 5 )
+    item0.Add( item1, 1, wx.GROW|wx.ALL, 5 )
 
     item19 = wx.StaticBox( parent, -1, "Screen Capture" )
     item18 = wx.StaticBoxSizer( item19, wx.VERTICAL )
