@@ -149,16 +149,22 @@ class SerIface(threading.Thread):
 
         while self.serI.inWaiting() != 0:
             ch = self.serI.read(1)
-            if struct.unpack("B",ch)[0] == 0x0A:
+            #print("%02X"%struct.unpack("B",ch)[0])
+            if ch == b'\x0A':
+                #print("Found endline")
                 break
             self.textLine += ch
             if len(self.textLine) > 100: # Don't let line grow forever if we're just getting garbage
                 self.textLine = self.textLine[:-20]
         else: # No more character waiting
             return 0.25 # Return quickly
-        txt = self.textLine.decode('ascii')
+        txt = ""
+        try:
+            txt = self.textLine.decode('ascii')
+        except:
+            self.state = self.WaitForHeader
         if  not ((txt.find("CSA803") == 0) or (txt.find("DIGITIZING SAMPLING OSCILLOSCOPE") == 0)): # Garbage line
-            self.textLine = ""
+            self.textLine = b""
             return 0.25 # Return quickly
 
         # We're good to go!
@@ -288,7 +294,7 @@ class DataByter():
 
     def Reset(self):
         self.idx = 0
-        self.buf = ""
+        self.buf = b""
 
     def GetByte(self):
         
@@ -303,7 +309,7 @@ class DataByter():
         if len(self.buf) > self.idx:
             b = self.buf[self.idx]
             self.idx += 1
-            return struct.unpack("B",b)
+            return b
         
         # Get whatever's in the serial port, or hang for at least one character if it's empty
         btg = max(1,self.serI.inWaiting())
@@ -313,7 +319,7 @@ class DataByter():
         if len(self.buf) > self.idx:
             b = self.buf[self.idx]
             self.idx += 1
-            return struct.unpack("B",b)
+            return b
 
         # Nothing available
         raise serial.SerialException
