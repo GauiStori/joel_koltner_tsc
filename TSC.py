@@ -84,7 +84,7 @@ class SerIface(threading.Thread):
         self.lastState = None
         self.terminate = False # Exit thread when this becomes true
         
-        self.serI = serial.Serial(port=None, baudrate=19200, rtscts=1, timeout=0.25) # Defaults to 8-N-1
+        self.serI = serial.Serial(port=None, baudrate=9600, rtscts=1, timeout=0.25) # Defaults to 8-N-1
         self.db = DataByter(self.serI)
         self.dd = DDots()
         
