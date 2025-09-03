@@ -13,6 +13,7 @@ import serial
 import threading
 import time
 import struct
+from PIL import Image
 
 from TSC_wdr import *
 
@@ -84,7 +85,7 @@ class SerIface(threading.Thread):
         self.lastState = None
         self.terminate = False # Exit thread when this becomes true
         
-        self.serI = serial.Serial(port=None, baudrate=9600, rtscts=1, timeout=0.25) # Defaults to 8-N-1
+        self.serI = serial.Serial(port=None, baudrate=19200, rtscts=1, timeout=0.25) # Defaults to 8-N-1
         self.db = DataByter(self.serI)
         self.dd = DDots()
         
@@ -235,7 +236,12 @@ class SerIface(threading.Thread):
         return 0
         
     def GetData(self):
-        
+        defaultPalette = [(0,0,0),(77,77,77),(140,140,140),(160,32,240),(255,255,200),(0,255,0),(0,255,255),(255,255,255)]
+        img = Image.new('RGB', (self.xRes, self.yRes), "black")
+        pixels = img.load()
+        x_pix = 0
+        y_pix = 0
+
         pixLeft = totPix = self.xRes * self.yRes # Total pixels we'll acquire
         pixList = [] # List of typles with pixel descriptors
         self.db.Reset()
@@ -250,7 +256,7 @@ class SerIface(threading.Thread):
                 b1 = self.db.GetByte()
                 pix0 = b1 & 0x07
                 pix1 = (b1 >> 3) & 0x07
-                rpt = (b1 >> 6)
+                rpt = (b1 >> 6) & 0x03
                 if rpt == 0: # Repeat count actually in next byte
                     rpt = self.db.GetByte()
                     if rpt == 0: # Not supposed to happen
@@ -271,12 +277,26 @@ class SerIface(threading.Thread):
                     self.SetStatus("Receiving data (%d%%)" % pd + self.dd.Dots())
                     wx.CallAfter(self.gui.DrawPixPairs,pixList)
                     pixList = []
-                
+
+                pltl = min(2*rpt, self.xRes-x_pix)
+                for i in range(x_pix,x_pix+pltl):
+                    pixels[i,y_pix]=defaultPalette[pix0]
+                end = min(x_pix+pltl+1, self.xRes)
+                for i in range(x_pix+1,end):
+                    pixels[i,y_pix]=defaultPalette[pix1]
+                x_pix += pltl
+                if x_pix >= self.xRes:
+                    x_pix = 0
+                    y_pix += 1
+
         except serial.SerialException: # Timed out (or perhaps port closed somehow)
             
             wx.CallAfter(self.ltc.LogError,"Timed out waiting for data; capture aborted.\n")
             self.state = self.WaitForHeader
             return 0
+
+        img.show()
+        img.save("testplot.tif")
 
         wx.CallAfter(self.ltc.Log,"Screen capture finished.\n")
         self.state = self.WaitForHeader
