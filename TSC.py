@@ -237,26 +237,24 @@ class SerIface(threading.Thread):
         
     def GetData(self):
         defaultPalette = [(0,0,0),(77,77,77),(140,140,140),(160,32,240),(255,255,200),(0,255,0),(0,255,255),(255,255,255)]
-        img = Image.new('RGB', (self.xRes, self.yRes), "black")
-        pixels = img.load()
-        x_pix = 0
-        y_pix = 0
-
-        pixLeft = totPix = self.xRes * self.yRes # Total pixels we'll acquire
+        pixLeft = totPix = self.xRes * self.yRes - 2 # Total pixels we'll acquire
         pixList = [] # List of typles with pixel descriptors
+        
         self.db.Reset()
         
         self.SetStatus("Receiving data (0%)" + self.dd.Dots())
         wx.CallAfter(self.ltc.Log,"Beginning screen capture.\n")
         
+        img = Image.new('RGB', (self.xRes, self.yRes), "black")
+        pixels = img.load()
+        x_pix = 0
+        y_pix = 0
         try: # Try to get all the pixels
-            
             while pixLeft > 0:
-                
                 b1 = self.db.GetByte()
                 pix0 = b1 & 0x07
                 pix1 = (b1 >> 3) & 0x07
-                rpt = (b1 >> 6) & 0x03
+                rpt = (b1 >> 6)
                 if rpt == 0: # Repeat count actually in next byte
                     rpt = self.db.GetByte()
                     if rpt == 0: # Not supposed to happen
@@ -265,9 +263,13 @@ class SerIface(threading.Thread):
                         return 0
                     if rpt < 4: # Repeat count >255, LSB in next byte
                         rpt = (rpt << 8) + self.db.GetByte()
-                
+                total_pixels = rpt * 2
+                if total_pixels > pixLeft:
+                    print("Repeat count exceeds remaining pixels.")
+                    break
+
                 pixList.append((pix0,pix1,rpt))
-                pixLeft -= rpt*2
+                pixLeft -= total_pixels
                 
                 if len(pixList) == 25 or pixLeft == 0: # Send a block over to the GUI
                     if self.terminate: # Good time to check if we should quit the thread
@@ -278,16 +280,23 @@ class SerIface(threading.Thread):
                     wx.CallAfter(self.gui.DrawPixPairs,pixList)
                     pixList = []
 
-                pltl = min(2*rpt, self.xRes-x_pix)
-                for i in range(x_pix,x_pix+pltl):
-                    pixels[i,y_pix]=defaultPalette[pix0]
-                end = min(x_pix+pltl+1, self.xRes)
-                for i in range(x_pix+1,end):
-                    pixels[i,y_pix]=defaultPalette[pix1]
+                pltl = min(total_pixels, self.xRes - x_pix)
+
+                for i in range(pltl):
+                    if (i % 2) == 0:
+                        pixels[x_pix + i, y_pix] = defaultPalette[pix0]
+                    else:
+                        pixels[x_pix + i, y_pix] = defaultPalette[pix1]
+
                 x_pix += pltl
+
                 if x_pix >= self.xRes:
                     x_pix = 0
                     y_pix += 1
+                    if y_pix >= self.yRes:
+                        print("Exceeded vertical resolution.")
+                        break
+            img.save("image.png")
 
         except serial.SerialException: # Timed out (or perhaps port closed somehow)
             
@@ -295,8 +304,6 @@ class SerIface(threading.Thread):
             self.state = self.WaitForHeader
             return 0
 
-        img.show()
-        img.save("testplot.tif")
 
         wx.CallAfter(self.ltc.Log,"Screen capture finished.\n")
         self.state = self.WaitForHeader
