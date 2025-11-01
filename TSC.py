@@ -1,11 +1,13 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #----------------------------------------------------------------------------
 # Name:         TSC.py
-# Author:       Joel Koltner
+# Author:       Joel Koltner, Gudjon I. Gudjonsson
 # Created:      5/2010
+# Modified      2025-11-01
 # Copyright:    None
 #----------------------------------------------------------------------------
 
+import platform
 import wx
 import wx.lib.inspection
 import wx.html
@@ -13,8 +15,13 @@ import serial
 import threading
 import time
 import struct
-
+from PIL import Image
+import io
 from TSC_wdr import *
+import pdb
+import os
+import subprocess
+
 
 TEK_XRES=552 # Screen resolution of scope, X dimension
 TEK_YRES=704 # Ditto, Y
@@ -72,6 +79,7 @@ class SerIface(threading.Thread):
         self.newPortF = True # Flag set by GUI when self.newPort has been changed
         self.gui = gui
         self.ltc = gui.GetLogTextCtrl()
+        self.image = None
         
     # Update status label in GUI
     def SetStatus(self, text):
@@ -84,7 +92,7 @@ class SerIface(threading.Thread):
         self.lastState = None
         self.terminate = False # Exit thread when this becomes true
         
-        self.serI = serial.Serial(port=None, baudrate=19200, rtscts=1, timeout=0.25) # Defaults to 8-N-1
+        self.serI = serial.Serial(port=None, baudrate=9600, rtscts=1, timeout=0.25) # Defaults to 8-N-1
         self.db = DataByter(self.serI)
         self.dd = DDots()
         
@@ -163,7 +171,7 @@ class SerIface(threading.Thread):
             txt = self.textLine.decode('ascii')
         except:
             self.state = self.WaitForHeader
-        if  not ((txt.find("CSA803") == 0) or (txt.find("DIGITIZING SAMPLING OSCILLOSCOPE") == 0)): # Garbage line
+        if  not ((txt.find("CSA80") == 0) or (txt.find("DIGITIZING SAMPLING OSCILLOSCOPE") == 0)): # Garbage line
             self.textLine = b""
             return 0.25 # Return quickly
 
@@ -235,18 +243,20 @@ class SerIface(threading.Thread):
         return 0
         
     def GetData(self):
-        
-        pixLeft = totPix = self.xRes * self.yRes # Total pixels we'll acquire
+        defaultPalette = [(0,0,0),(77,77,77),(140,140,140),(160,32,240),(255,255,200),(0,255,0),(0,255,255),(255,255,255)]
+        pixLeft = totPix = self.xRes * self.yRes - 2 # Total pixels we'll acquire
         pixList = [] # List of typles with pixel descriptors
+        
         self.db.Reset()
         
         self.SetStatus("Receiving data (0%)" + self.dd.Dots())
         wx.CallAfter(self.ltc.Log,"Beginning screen capture.\n")
         
+        pixels = self.gui.image.load()
+        x_pix = 0
+        y_pix = 0
         try: # Try to get all the pixels
-            
             while pixLeft > 0:
-                
                 b1 = self.db.GetByte()
                 pix0 = b1 & 0x07
                 pix1 = (b1 >> 3) & 0x07
@@ -259,9 +269,13 @@ class SerIface(threading.Thread):
                         return 0
                     if rpt < 4: # Repeat count >255, LSB in next byte
                         rpt = (rpt << 8) + self.db.GetByte()
-                
+                total_pixels = rpt * 2
+                if total_pixels > pixLeft:
+                    print("Repeat count exceeds remaining pixels.")
+                    break
+
                 pixList.append((pix0,pix1,rpt))
-                pixLeft -= rpt*2
+                pixLeft -= total_pixels
                 
                 if len(pixList) == 25 or pixLeft == 0: # Send a block over to the GUI
                     if self.terminate: # Good time to check if we should quit the thread
@@ -271,12 +285,31 @@ class SerIface(threading.Thread):
                     self.SetStatus("Receiving data (%d%%)" % pd + self.dd.Dots())
                     wx.CallAfter(self.gui.DrawPixPairs,pixList)
                     pixList = []
-                
+
+                pltl = min(total_pixels, self.xRes - x_pix)
+
+                for i in range(pltl):
+                    if (i % 2) == 0:
+                        pixels[x_pix + i, y_pix] = defaultPalette[pix0]
+                    else:
+                        pixels[x_pix + i, y_pix] = defaultPalette[pix1]
+
+                x_pix += pltl
+
+                if x_pix >= self.xRes:
+                    x_pix = 0
+                    y_pix += 1
+                    if y_pix >= self.yRes:
+                        print("Exceeded vertical resolution.")
+                        break
+            #self.image.save("image.png")
+
         except serial.SerialException: # Timed out (or perhaps port closed somehow)
             
             wx.CallAfter(self.ltc.LogError,"Timed out waiting for data; capture aborted.\n")
             self.state = self.WaitForHeader
             return 0
+
 
         wx.CallAfter(self.ltc.Log,"Screen capture finished.\n")
         self.state = self.WaitForHeader
@@ -340,6 +373,7 @@ class GUI(wx.Frame):
         self.mdSzr = MainDlg(parent=self.panel, call_fit=False, set_sizer=True) # Insert main window
         self.sph = None # No serial interface yet
         self.ltc = self.GetLogTextCtrl()
+        self.clipboard = None
         
         # Read back user preferences
         cfg = wx.Config.Get()
@@ -367,6 +401,7 @@ class GUI(wx.Frame):
         #self.panel.capSizer.Add(item=self.capWin, flag=wx.ALL, border=10)
         self.panel.capSizer.Add(self.capWin, flag=wx.ALL, border=10)
         self.capBmp = wx.Bitmap(TEK_XRES,TEK_YRES)
+        self.image = Image.new('RGB', (TEK_XRES,TEK_YRES), "black")
         self.NewPage()
         
         # Tell main sizer to perform layer and then set minimum size of us (frame) to it            
@@ -500,15 +535,59 @@ class GUI(wx.Frame):
         dc.SelectObject(wx.NullBitmap)
         self.needCapPaint = True
         
-    def OnCopyToClipboard(self,event):
-        d = wx.BitmapDataObject(self.capBmp)
-        if wx.TheClipboard.Open():
-            wx.TheClipboard.SetData(d)
-            wx.TheClipboard.Flush()
-            wx.TheClipboard.Close()
-            self.ltc.Log("Image copied to cliboard.\n")
+    def OnCopyToClipboard(self, event):
+
+        # --- Detect display system ---
+        session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+        wayland_display = os.environ.get("WAYLAND_DISPLAY")
+        display_system = "wayland" if session_type == "wayland" or wayland_display else "x11"
+
+        if platform.system() == 'Linux' and display_system == "wayland":
+            # --- Wayland path: use wl-copy ---
+            output = io.BytesIO()
+            self.image.save(output, format="PNG")
+            png_data = output.getvalue()
+
+            try:
+                # Copy directly to Wayland clipboard
+                subprocess.run(
+                    ["wl-copy"],
+                    input=png_data,
+                    check=True
+                )
+                self.ltc.Log("✅ Image copied via wl-copy (Wayland clipboard).\n")
+            except FileNotFoundError:
+                self.ltc.LogError("❌ wl-copy not found. Install with 'sudo apt install wl-clipboard'.\n")
+            except subprocess.CalledProcessError as e:
+                self.ltc.LogError(f"❌ wl-copy failed: {e}\n")
+
+        elif platform.system() == 'Linux':
+            # --- X11 path: use wx clipboard ---
+            wx_image = wx.Image(*self.image.size)
+            wx_image.SetData(self.image.convert('RGB').tobytes())
+            wx_bitmap = wx.Bitmap(wx_image)
+            d = wx.BitmapDataObject(wx_bitmap)
+
+            if wx.TheClipboard.Open():
+                wx.TheClipboard.SetData(d)
+                wx.TheClipboard.Flush()
+                wx.TheClipboard.Close()
+                self.clipboard_data = d  # Keep reference alive
+                self.ltc.Log("✅ Image copied via wx clipboard (X11).\n")
+            else:
+                self.ltc.LogError("❌ Couldn't open X11 clipboard.\n")
+
         else:
-            self.ltc.LogError("Couldn't open clipboard!\n")
+            # --- Non-Linux (Windows/macOS) path ---
+            d = wx.BitmapDataObject(self.capBmp)
+            if wx.TheClipboard.Open():
+                wx.TheClipboard.SetData(d)
+                wx.TheClipboard.Flush()
+                wx.TheClipboard.Close()
+                self.clipboard_data = d  # Keep reference alive
+                self.ltc.Log("✅ Image copied to clipboard.\n")
+            else:
+                self.ltc.LogError("❌ Couldn't open clipboard.\n")
             
 #  Serial port stuff
     def GetSerPortCB(self):
@@ -565,12 +644,12 @@ class App(wx.App):
         wx.Config.Set(config)
 
         # Bring up the GUI
-        self.mainFrame = GUI(parent=None, id=-1, title="Tektronix 1180x Screen Capture Utility")
+        self.mainFrame = GUI(parent=None, id=-1, title="Tektronix CSA80x/1180x Screen Capture Utility, v1.1")
         self.SetTopWindow(self.mainFrame)
         self.mainFrame.Show(True)
         
         ltc = self.mainFrame.GetLogTextCtrl()
-        ltc.Log("Tektronix 1180x Screen Capture Utility\n")
+        ltc.Log("Tektronix CSA80x/1180x Screen Capture Utility\n")
         ltc.Log("By Joel Koltner, May, 2010\n\n")
         
         self.mainFrame.SetIcon(self.GetAppIcon())
