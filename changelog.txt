@@ -1,0 +1,5 @@
+2025-11-01 v1.1
+  * Works with python3 and wxPython 4.2.3
+  * Show COMx for Windows, /dev/ttyXXX for Linux
+  * Fix copy to clipboard on Linux
+  * Add support for CSA80x

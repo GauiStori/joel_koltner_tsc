@@ -1,11 +1,13 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #----------------------------------------------------------------------------
 # Name:         TSC.py
-# Author:       Joel Koltner
+# Author:       Joel Koltner, Gudjon I. Gudjonsson
 # Created:      5/2010
+# Modified      2025-11-01
 # Copyright:    None
 #----------------------------------------------------------------------------
 
+import platform
 import wx
 import wx.lib.inspection
 import wx.html
@@ -14,8 +16,12 @@ import threading
 import time
 import struct
 from PIL import Image
-
+import io
 from TSC_wdr import *
+import pdb
+import os
+import subprocess
+
 
 TEK_XRES=552 # Screen resolution of scope, X dimension
 TEK_YRES=704 # Ditto, Y
@@ -73,6 +79,7 @@ class SerIface(threading.Thread):
         self.newPortF = True # Flag set by GUI when self.newPort has been changed
         self.gui = gui
         self.ltc = gui.GetLogTextCtrl()
+        self.image = None
         
     # Update status label in GUI
     def SetStatus(self, text):
@@ -164,7 +171,7 @@ class SerIface(threading.Thread):
             txt = self.textLine.decode('ascii')
         except:
             self.state = self.WaitForHeader
-        if  not ((txt.find("CSA803") == 0) or (txt.find("DIGITIZING SAMPLING OSCILLOSCOPE") == 0)): # Garbage line
+        if  not ((txt.find("CSA80") == 0) or (txt.find("DIGITIZING SAMPLING OSCILLOSCOPE") == 0)): # Garbage line
             self.textLine = b""
             return 0.25 # Return quickly
 
@@ -245,8 +252,7 @@ class SerIface(threading.Thread):
         self.SetStatus("Receiving data (0%)" + self.dd.Dots())
         wx.CallAfter(self.ltc.Log,"Beginning screen capture.\n")
         
-        img = Image.new('RGB', (self.xRes, self.yRes), "black")
-        pixels = img.load()
+        pixels = self.gui.image.load()
         x_pix = 0
         y_pix = 0
         try: # Try to get all the pixels
@@ -296,7 +302,7 @@ class SerIface(threading.Thread):
                     if y_pix >= self.yRes:
                         print("Exceeded vertical resolution.")
                         break
-            img.save("image.png")
+            #self.image.save("image.png")
 
         except serial.SerialException: # Timed out (or perhaps port closed somehow)
             
@@ -367,6 +373,7 @@ class GUI(wx.Frame):
         self.mdSzr = MainDlg(parent=self.panel, call_fit=False, set_sizer=True) # Insert main window
         self.sph = None # No serial interface yet
         self.ltc = self.GetLogTextCtrl()
+        self.clipboard = None
         
         # Read back user preferences
         cfg = wx.Config.Get()
@@ -394,6 +401,7 @@ class GUI(wx.Frame):
         #self.panel.capSizer.Add(item=self.capWin, flag=wx.ALL, border=10)
         self.panel.capSizer.Add(self.capWin, flag=wx.ALL, border=10)
         self.capBmp = wx.Bitmap(TEK_XRES,TEK_YRES)
+        self.image = Image.new('RGB', (TEK_XRES,TEK_YRES), "black")
         self.NewPage()
         
         # Tell main sizer to perform layer and then set minimum size of us (frame) to it            
@@ -527,15 +535,59 @@ class GUI(wx.Frame):
         dc.SelectObject(wx.NullBitmap)
         self.needCapPaint = True
         
-    def OnCopyToClipboard(self,event):
-        d = wx.BitmapDataObject(self.capBmp)
-        if wx.TheClipboard.Open():
-            wx.TheClipboard.SetData(d)
-            wx.TheClipboard.Flush()
-            wx.TheClipboard.Close()
-            self.ltc.Log("Image copied to cliboard.\n")
+    def OnCopyToClipboard(self, event):
+
+        # --- Detect display system ---
+        session_type = os.environ.get("XDG_SESSION_TYPE", "").lower()
+        wayland_display = os.environ.get("WAYLAND_DISPLAY")
+        display_system = "wayland" if session_type == "wayland" or wayland_display else "x11"
+
+        if platform.system() == 'Linux' and display_system == "wayland":
+            # --- Wayland path: use wl-copy ---
+            output = io.BytesIO()
+            self.image.save(output, format="PNG")
+            png_data = output.getvalue()
+
+            try:
+                # Copy directly to Wayland clipboard
+                subprocess.run(
+                    ["wl-copy"],
+                    input=png_data,
+                    check=True
+                )
+                self.ltc.Log("✅ Image copied via wl-copy (Wayland clipboard).\n")
+            except FileNotFoundError:
+                self.ltc.LogError("❌ wl-copy not found. Install with 'sudo apt install wl-clipboard'.\n")
+            except subprocess.CalledProcessError as e:
+                self.ltc.LogError(f"❌ wl-copy failed: {e}\n")
+
+        elif platform.system() == 'Linux':
+            # --- X11 path: use wx clipboard ---
+            wx_image = wx.Image(*self.image.size)
+            wx_image.SetData(self.image.convert('RGB').tobytes())
+            wx_bitmap = wx.Bitmap(wx_image)
+            d = wx.BitmapDataObject(wx_bitmap)
+
+            if wx.TheClipboard.Open():
+                wx.TheClipboard.SetData(d)
+                wx.TheClipboard.Flush()
+                wx.TheClipboard.Close()
+                self.clipboard_data = d  # Keep reference alive
+                self.ltc.Log("✅ Image copied via wx clipboard (X11).\n")
+            else:
+                self.ltc.LogError("❌ Couldn't open X11 clipboard.\n")
+
         else:
-            self.ltc.LogError("Couldn't open clipboard!\n")
+            # --- Non-Linux (Windows/macOS) path ---
+            d = wx.BitmapDataObject(self.capBmp)
+            if wx.TheClipboard.Open():
+                wx.TheClipboard.SetData(d)
+                wx.TheClipboard.Flush()
+                wx.TheClipboard.Close()
+                self.clipboard_data = d  # Keep reference alive
+                self.ltc.Log("✅ Image copied to clipboard.\n")
+            else:
+                self.ltc.LogError("❌ Couldn't open clipboard.\n")
             
 #  Serial port stuff
     def GetSerPortCB(self):
@@ -592,12 +644,12 @@ class App(wx.App):
         wx.Config.Set(config)
 
         # Bring up the GUI
-        self.mainFrame = GUI(parent=None, id=-1, title="Tektronix 1180x Screen Capture Utility")
+        self.mainFrame = GUI(parent=None, id=-1, title="Tektronix CSA80x/1180x Screen Capture Utility, v1.1")
         self.SetTopWindow(self.mainFrame)
         self.mainFrame.Show(True)
         
         ltc = self.mainFrame.GetLogTextCtrl()
-        ltc.Log("Tektronix 1180x Screen Capture Utility\n")
+        ltc.Log("Tektronix CSA80x/1180x Screen Capture Utility\n")
         ltc.Log("By Joel Koltner, May, 2010\n\n")
         
         self.mainFrame.SetIcon(self.GetAppIcon())
